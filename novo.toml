@@ -18,6 +18,6 @@ novo        = ">= 0.24.1"
 # The DER layer, the digests and the AES-CBC of cms-nv.  Until cms-nv is
 # on the registry this is a path dependency; the publish round switches it
 # to the range.
-cms-nv    = { path = "../cms-nv" }
+cms-nv    = "^0.1.0"
 crypto-nv = "^0.1.8"
 pbkdf2-nv = "^0.1.0"

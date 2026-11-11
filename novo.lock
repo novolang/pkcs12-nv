@@ -22,8 +22,11 @@ version = "0.2.1"
 hash = "c81b54f47ee0efd44548a81c1427880e4a001e3133333b268b8d331ccd480e42"
 
 [cms-nv]
-source = "path"
-path = "../cms-nv"
+source = "registry"
+url = "https://registry.novo-lang.org"
+req = "^0.1.0"
+version = "0.1.0"
+hash = "9fa73807eb99ae1e6fff9f1a23746aeb1c91e7ab177b9ec9d1b3073f10c80b99"
 
 [crypto-nv]
 source = "registry"
