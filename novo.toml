@@ -1,0 +1,23 @@
+[package]
+name        = "pkcs12-nv"
+version     = "0.1.0"
+description = "PKCS #12, RFC 7292, over cms-nv: the PFX with its MAC (HMAC-SHA-1 and HMAC-SHA-256 under the appendix B key derivation), the AuthenticatedSafe of data and encrypted-data safes, and the SafeBags (key, shrouded key, certificate, CRL, secret and safe contents) with their friendlyName and localKeyId.  Reads and writes the password-based encryption OpenSSL 3 writes, PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC; the legacy TripleDES and RC2 schemes are named and left encrypted."
+license     = "Apache-2.0"
+stability   = "experimental"
+layer       = "core"
+category    = "crypto"
+tags        = ["pkcs12", "pfx", "rfc-7292", "rfc-8018", "keystore", "certificate", "private-key", "pbes2", "der"]
+repository  = "https://github.com/novolang/pkcs12-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.24.1"
+
+[docs.pages]
+"README.md" = "The password-protected file that holds a key and its certificates"
+
+[dependencies]
+# The DER layer, the digests and the AES-CBC of cms-nv.  Until cms-nv is
+# on the registry this is a path dependency; the publish round switches it
+# to the range.
+cms-nv    = { path = "../cms-nv" }
+crypto-nv = "^0.1.8"
+pbkdf2-nv = "^0.1.0"

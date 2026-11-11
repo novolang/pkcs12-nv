@@ -1,0 +1,127 @@
+// p12pbe.nv — password-based encryption in a PKCS #12 file.
+//
+// Two families appear.  PBES2 (RFC 8018 section 6.2) is what OpenSSL 3
+// writes and what this package writes: PBKDF2 derives the key from the
+// password's UTF-8 octets, and AES in CBC mode with PKCS #7 padding
+// encrypts.  The legacy schemes of RFC 7292 appendix C, such as
+// pbeWithSHAAnd3-KeyTripleDES-CBC and pbeWithSHAAnd40BitRC2-CBC, derive the
+// key and the IV with the appendix B function of `p12kdf` and then use
+// TripleDES or RC2, which the registry has no package for.  Those are
+// refused with the algorithm named, and the caller keeps the ciphertext.
+//
+// The algorithm identifier is read once into a `P12Pbe`, so a caller can
+// ask what a bag is encrypted with before deciding to open it.
+
+use std.bytes
+use std.list
+use pbkdf2prf
+use pbkdf2params
+use pbkdf2kdf
+use cmserr
+use cmsoid
+use cmsder
+use cmscrypto
+use p12kdf
+
+// id-PBES2.
+pub const OID_PBES2 = "1.2.840.113549.1.5.13"
+
+// The PBKDF2 and cipher of a PBES2 identifier.
+pub struct P12Pbe
+    // The algorithm's object identifier: PBES2, or a legacy PKCS #12 scheme.
+    oid: Str
+    // PBES2 only: the salt, the iteration count, the pseudorandom function,
+    // the cipher's object identifier and the IV.
+    salt: Bytes
+    iterations: Int
+    prf: Str
+    cipher: Str
+    iv: Bytes
+
+fn blank(oid: Str) -> P12Pbe
+    P12Pbe { oid: oid, salt: bytes.zeros(0), iterations: 0, prf: "", cipher: "", iv: bytes.zeros(0) }
+
+// Read an AlgorithmIdentifier of a password-based encryption scheme.
+pub fn read(alg: DerNode) -> Result<P12Pbe, CmsError> []
+    let a = cmsder.alg_of(alg)!
+    if a.oid != OID_PBES2
+        return Ok(blank(a.oid))
+    match a.params
+        None    => Err(CmsMalformed("the PBES2 parameters"))
+        Some(p) =>
+            let kids = cmsder.children(p)!
+            let kdf = cmsder.alg_of(cmsder.member(kids, 0, "the key derivation function")!)!
+            let scheme = cmsder.alg_of(cmsder.member(kids, 1, "the encryption scheme")!)!
+            if kdf.oid != OID_PBKDF2
+                return Err(CmsUnsupportedAlg(kdf.oid))
+            match kdf.params
+                None     => Err(CmsMalformed("the PBKDF2 parameters"))
+                Some(kp) =>
+                    let k = cmsder.children(kp)!
+                    let salt = cmsder.octets(cmsder.member(k, 0, "the salt")!)!
+                    let count = cmsder.int_value(cmsder.member(k, 1, "the iteration count")!)!
+                    var prf = OID_HMAC_SHA1
+                    var at = 2
+                    if list.len(k) > at and cmsder.is_universal(k[at], 2)
+                        at = 3
+                    if list.len(k) > at
+                        prf = cmsder.alg_of(k[at])!.oid
+                    match scheme.params
+                        None     => Err(CmsMalformed("the cipher parameters"))
+                        Some(ip) =>
+                            let iv = cmsder.octets(ip)!
+                            Ok(P12Pbe { oid: a.oid, salt: salt, iterations: count, prf: prf, cipher: scheme.oid, iv: iv })
+
+fn prf_of(oid: Str) -> Result<Pbkdf2Prf, CmsError>
+    match oid
+        "1.2.840.113549.2.7"  => Ok(Pbkdf2HmacSha1)
+        "1.2.840.113549.2.9"  => Ok(Pbkdf2HmacSha256)
+        "1.2.840.113549.2.11" => Ok(Pbkdf2HmacSha512)
+        _                     => Err(CmsUnsupportedAlg(oid))
+
+fn key_len(cipher: Str) -> Int
+    match cipher
+        "2.16.840.1.101.3.4.1.2"  => 16
+        "2.16.840.1.101.3.4.1.22" => 24
+        "2.16.840.1.101.3.4.1.42" => 32
+        _                         => 0
+
+fn derived_key(prf: Pbkdf2Prf, password: Str, salt: Bytes, count: Int, len: Int) -> Result<Bytes, CmsError>
+    match pbkdf2params.allowing_below_floor(prf, count, len)
+        Err(e) => Err(CmsBadKey(e.message()))
+        Ok(params) =>
+            match pbkdf2kdf.derive(params, p12kdf.utf8(password), salt)
+                // cov: skip — `derive` refuses only parameters, which `allowing_below_floor` has accepted
+                Err(e) => Err(CmsBadKey(e.message()))
+                Ok(k)  => Ok(k)
+
+// Decrypt with a scheme read by `read`.  The count is the sender's, so the
+// caller bounds it with `max_iterations`.  A legacy scheme is
+// `CmsNotImplemented`, naming it.
+pub fn decrypt(pbe: P12Pbe, password: Str, max_iterations: Int, ct: Bytes) -> Result<Bytes, CmsError> []
+    if pbe.oid != OID_PBES2
+        return Err(CmsNotImplemented("the password-based encryption ${pbe.oid}: TripleDES and RC2 are not on the registry"))
+    let klen = key_len(pbe.cipher)
+    if klen == 0
+        return Err(CmsUnsupportedAlg(pbe.cipher))
+    if pbe.iterations < 1 or pbe.iterations > max_iterations
+        return Err(CmsBadKey("the iteration count is ${pbe.iterations}, the limit is ${max_iterations}"))
+    let prf = prf_of(pbe.prf)!
+    let key = derived_key(prf, password, pbe.salt, pbe.iterations, klen)!
+    cmscrypto.cbc_decrypt(key, pbe.iv, ct)
+
+// The DER AlgorithmIdentifier of PBES2 with PBKDF2-HMAC-SHA-256 and
+// AES-256-CBC for this salt, count and IV.
+pub fn alg_id(salt: Bytes, iterations: Int, iv: Bytes) -> Result<Bytes, CmsError> []
+    let prf = cmsder.alg_id(OID_HMAC_SHA256, Some(cmsder.null_value()))!
+    let kdf = cmsder.alg_id(OID_PBKDF2, Some(cmsder.seq([cmsder.oct(salt), cmsder.int_u(iterations), prf])))!
+    let scheme = cmsder.alg_id(OID_AES256_CBC, Some(cmsder.oct(iv)))!
+    cmsder.alg_id(OID_PBES2, Some(cmsder.seq([kdf, scheme])))
+
+// Encrypt with PBES2, PBKDF2-HMAC-SHA-256 and AES-256-CBC.  The salt, the
+// count and the 16-byte IV are the caller's.
+pub fn encrypt(password: Str, salt: Bytes, iterations: Int, iv: Bytes, plain: Bytes) -> Result<Bytes, CmsError> []
+    if bytes.len(salt) < 8
+        return Err(CmsBadKey("the salt is at least 8 bytes"))
+    let key = derived_key(Pbkdf2HmacSha256, password, salt, iterations, 32)!
+    cmscrypto.cbc_encrypt(key, iv, plain)

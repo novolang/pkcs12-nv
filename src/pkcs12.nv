@@ -1,0 +1,370 @@
+// pkcs12.nv — the PFX of RFC 7292: reading, with the MAC checked and the
+// safes opened, and writing.
+//
+// A PFX is a version, an `authSafe` and an optional MAC.  The authSafe is a
+// CMS ContentInfo of type data whose octets are an AuthenticatedSafe, a
+// SEQUENCE of ContentInfos called safes.  A safe is either `data`, whose
+// octets are a SafeContents in the clear, or `encryptedData`, whose
+// ciphertext decrypts to a SafeContents under a password-based scheme.  A
+// SafeContents is a SEQUENCE of SafeBags, and each bag carries a key, a
+// certificate, a CRL, a secret or another SafeContents, with attributes: the
+// `friendlyName`, a BMPString, and the `localKeyId`, which ties a key to the
+// certificate that goes with it.
+//
+// The MAC covers the octets of the AuthenticatedSafe and is checked before
+// anything is decrypted, because it is the only thing that tells a wrong
+// password from a damaged file for a safe that is not encrypted.  It is
+// HMAC-SHA-1 or HMAC-SHA-256 (or -384 or -512) under a key from the
+// appendix B derivation (`p12kdf`) with purpose 3, over the password as a
+// BMPString.
+//
+// A shrouded key bag and an encrypted safe are opened when their scheme is
+// PBES2.  One with a legacy TripleDES or RC2 scheme is left closed: the safe
+// has `opened` false and `algorithm` naming the scheme, and the bytes are
+// kept so that the caller can hand them to a tool that has the cipher.
+
+use std.bytes
+use std.list
+use hashing
+use digest
+use cmserr
+use cmsoid
+use cmsder
+use cmsinfo
+use cmscrypto
+use p12kdf
+use p12pbe
+
+// ── object identifiers ───────────────────────────────────────────────
+
+// keyBag, shrouded key bag, certBag, crlBag, secretBag, safeContentsBag.
+pub const OID_KEY_BAG = "1.2.840.113549.1.12.10.1.1"
+pub const OID_SHROUDED_KEY_BAG = "1.2.840.113549.1.12.10.1.2"
+pub const OID_CERT_BAG = "1.2.840.113549.1.12.10.1.3"
+pub const OID_CRL_BAG = "1.2.840.113549.1.12.10.1.4"
+pub const OID_SECRET_BAG = "1.2.840.113549.1.12.10.1.5"
+pub const OID_SAFE_CONTENTS_BAG = "1.2.840.113549.1.12.10.1.6"
+// x509Certificate and sdsiCertificate, the two certificate types of a certBag.
+pub const OID_X509_CERTIFICATE = "1.2.840.113549.1.9.22.1"
+pub const OID_SDSI_CERTIFICATE = "1.2.840.113549.1.9.22.2"
+// x509CRL.
+pub const OID_X509_CRL = "1.2.840.113549.1.9.23.1"
+// The attributes friendlyName and localKeyId.
+pub const OID_FRIENDLY_NAME = "1.2.840.113549.1.9.20"
+pub const OID_LOCAL_KEY_ID = "1.2.840.113549.1.9.21"
+
+// The bag kinds of `P12Bag.kind`.
+pub const KIND_KEY = 0
+pub const KIND_SHROUDED_KEY = 1
+pub const KIND_CERT = 2
+pub const KIND_CRL = 3
+pub const KIND_SECRET = 4
+pub const KIND_SAFE_CONTENTS = 5
+pub const KIND_OTHER = 6
+
+// ── what is read ─────────────────────────────────────────────────────
+
+// One SafeBag.
+pub struct P12Bag
+    kind: Int
+    bag_id: Str
+    // The type of a certificate, CRL or secret: its object identifier.
+    value_id: Str
+    // The bag's value: the PrivateKeyInfo of a key bag (and of a shrouded
+    // key bag that was opened), the certificate or CRL octets, the encoded
+    // value of a secret, the SafeContents of a safe-contents bag, and for a
+    // shrouded key bag that was not opened its EncryptedPrivateKeyInfo.
+    value: Bytes
+    // Whether the value is in the clear.  False only for a shrouded key
+    // bag whose scheme is not PBES2.
+    opened: Bool
+    // The password-based scheme of a shrouded key bag.
+    algorithm: Str
+    friendly_name: Str
+    local_key_id: Bytes
+
+// One safe of the AuthenticatedSafe.
+pub struct P12Safe
+    encrypted: Bool
+    opened: Bool
+    // The scheme of an encrypted safe.
+    algorithm: Str
+    bags: [P12Bag]
+    // For a safe that was not opened, its ciphertext.
+    ciphertext: Bytes
+
+// A PFX that has been read.
+pub struct Pfx
+    version: Int
+    safes: [P12Safe]
+    mac_present: Bool
+    // The MAC's hash, as an object identifier, and the iteration count.
+    mac_hash: Str
+    mac_iterations: Int
+
+fn attr_value(set: DerNode) -> Result<DerNode, CmsError>
+    let vs = cmsder.children(set)!
+    cmsder.member(vs, 0, "the attribute value")
+
+// The friendly name and local key identifier from a bag's attributes.
+fn attributes_of(set: DerNode) -> Result<(Str, Bytes), CmsError>
+    var name = ""
+    var id = bytes.zeros(0)
+    for a in cmsder.children(set)!
+        let kids = cmsder.children(a)!
+        let o = cmsder.oid_text(cmsder.member(kids, 0, "the attribute type")!)!
+        let v = attr_value(cmsder.member(kids, 1, "the attribute values")!)!
+        if o == OID_FRIENDLY_NAME
+            name = p12kdf.bmp_to_str(cmsder.content(v))!
+        if o == OID_LOCAL_KEY_ID
+            id = cmsder.octets(v)!
+    Ok((name, id))
+
+fn bag_read(n: DerNode, password: Str, max_iterations: Int) -> Result<P12Bag, CmsError>
+    let kids = cmsder.children(n)!
+    let bag_id = cmsder.oid_text(cmsder.member(kids, 0, "the bag type")!)!
+    let wrapper = cmsder.member(kids, 1, "the bag value")!
+    if not cmsder.is_context(wrapper, 0)
+        return Err(CmsMalformed("the bag value is under [0]"))
+    let value = cmsder.member(cmsder.children(wrapper)!, 0, "the bag value")!
+    var name = ""
+    var id = bytes.zeros(0)
+    if list.len(kids) > 2
+        let a = attributes_of(kids[2])!
+        name = a.0
+        id = bytes.clone(a.1)
+    var kind = KIND_OTHER
+    var value_id = ""
+    var body = cmsder.raw(value)
+    var opened = true
+    var algorithm = ""
+    if bag_id == OID_KEY_BAG
+        kind = KIND_KEY
+    if bag_id == OID_SAFE_CONTENTS_BAG
+        kind = KIND_SAFE_CONTENTS
+    if bag_id == OID_SECRET_BAG
+        kind = KIND_SECRET
+        let parts = cmsder.children(value)!
+        value_id = cmsder.oid_text(cmsder.member(parts, 0, "the secret type")!)!
+        let inner = cmsder.member(cmsder.children(cmsder.member(parts, 1, "the secret value")!)!, 0, "the secret value")!
+        body = cmsder.raw(inner)
+    if bag_id == OID_CERT_BAG or bag_id == OID_CRL_BAG
+        if bag_id == OID_CERT_BAG
+            kind = KIND_CERT
+        else
+            kind = KIND_CRL
+        let parts = cmsder.children(value)!
+        value_id = cmsder.oid_text(cmsder.member(parts, 0, "the type")!)!
+        let inner = cmsder.member(cmsder.children(cmsder.member(parts, 1, "the value")!)!, 0, "the value")!
+        body = cmsder.octets(inner)!
+    if bag_id == OID_SHROUDED_KEY_BAG
+        kind = KIND_SHROUDED_KEY
+        let parts = cmsder.children(value)!
+        let pbe = p12pbe.read(cmsder.member(parts, 0, "the encryption algorithm")!)!
+        let ct = cmsder.octets(cmsder.member(parts, 1, "the encrypted key")!)!
+        algorithm = pbe.oid
+        if pbe.oid == p12pbe.OID_PBES2
+            body = p12pbe.decrypt(pbe, password, max_iterations, ct)!
+        else
+            opened = false
+    Ok(P12Bag { kind: kind, bag_id: bag_id, value_id: value_id, value: body, opened: opened,
+                algorithm: algorithm, friendly_name: name, local_key_id: id })
+
+fn bags_of(contents: Bytes, password: Str, max_iterations: Int) -> Result<[P12Bag], CmsError>
+    let top = cmsder.expect(cmsder.root(contents)!, 16, "the SafeContents")!
+    var out: [P12Bag] = []
+    for b in cmsder.children(top)!
+        let bag = bag_read(b, password, max_iterations)!
+        list.push(out, bag)
+    Ok(out)
+
+// The bags in the SafeContents octets of a safe-contents bag.
+pub fn bags_in(bag: P12Bag, password: Str, max_iterations: Int) -> Result<[P12Bag], CmsError> []
+    if bag.kind != KIND_SAFE_CONTENTS
+        return Err(CmsMalformed("only a safe-contents bag holds bags"))
+    bags_of(bag.value, password, max_iterations)
+
+fn safe_read(n: DerNode, password: Str, max_iterations: Int) -> Result<P12Safe, CmsError>
+    let kids = cmsder.children(n)!
+    let ct = cmsder.oid_text(cmsder.member(kids, 0, "the safe type")!)!
+    let wrapper = cmsder.member(kids, 1, "the safe content")!
+    let inner = cmsder.member(cmsder.children(wrapper)!, 0, "the safe content")!
+    if ct == OID_DATA
+        let bags = bags_of(cmsder.octets(inner)!, password, max_iterations)!
+        return Ok(P12Safe { encrypted: false, opened: true, algorithm: "", bags: bags, ciphertext: bytes.zeros(0) })
+    if ct == OID_ENCRYPTED_DATA
+        let parts = cmsder.children(inner)!
+        let eci = cmsder.children(cmsder.member(parts, 1, "the EncryptedContentInfo")!)!
+        let pbe = p12pbe.read(cmsder.member(eci, 1, "the encryption algorithm")!)!
+        let enc = cmsder.octets(cmsder.member(eci, 2, "the encrypted content")!)!
+        if pbe.oid != p12pbe.OID_PBES2
+            return Ok(P12Safe { encrypted: true, opened: false, algorithm: pbe.oid, bags: [], ciphertext: enc })
+        let plain = p12pbe.decrypt(pbe, password, max_iterations, enc)!
+        let bags = bags_of(plain, password, max_iterations)!
+        return Ok(P12Safe { encrypted: true, opened: true, algorithm: pbe.oid, bags: bags, ciphertext: bytes.zeros(0) })
+    Err(CmsWrongContentType(ct, "data or encrypted-data"))
+
+// ── the MAC ──────────────────────────────────────────────────────────
+
+fn mac_key_len(hash: Str) -> Int
+    cmscrypto.digest_len(hash)
+
+fn hmac(hash: Str, key: Bytes, msg: Bytes) -> Result<Bytes, CmsError>
+    match hash
+        "1.3.14.3.2.26"          => Ok(hashing.hmac_sha1(key, msg, bytes.zeros(20)))
+        "2.16.840.1.101.3.4.2.1" => Ok(hashing.hmac_sha256(key, msg, bytes.zeros(32)))
+        "2.16.840.1.101.3.4.2.2" => Ok(hashing.hmac_sha384(key, msg, bytes.zeros(48)))
+        "2.16.840.1.101.3.4.2.3" => Ok(hashing.hmac_sha512(key, msg, bytes.zeros(64)))
+        _                        => Err(CmsUnsupportedAlg(hash))
+
+// The MAC of the AuthenticatedSafe octets under the password.
+pub fn mac_of(hash: Str, password: Str, salt: Bytes, iterations: Int, safe: Bytes) -> Result<Bytes, CmsError> []
+    let bmp = p12kdf.bmp_password(password)!
+    let key = p12kdf.derive(hash, 3, bmp, salt, iterations, mac_key_len(hash))!
+    hmac(hash, key, safe)
+
+// ── reading ──────────────────────────────────────────────────────────
+
+// Read a PFX.  The MAC is checked first; a wrong password and a damaged
+// file are both `CmsAuthFailed`.  A PFX without a MAC is refused unless
+// `require_mac` is false.  `max_iterations` bounds the iteration count of the
+// MAC and of every PBKDF2 derivation, because the count is the writer's.
+pub fn read(src: Bytes, password: Str, max_iterations: Int, require_mac: Bool) -> Result<Pfx, CmsError> []
+    let top = cmsder.expect(cmsder.root(src)!, 16, "the PFX")!
+    let kids = cmsder.children(top)!
+    let version = cmsder.int_value(cmsder.member(kids, 0, "the version")!)!
+    if version != 3
+        return Err(CmsMalformed("the PFX version is ${version}, only 3 is defined"))
+    let auth = cmsder.member(kids, 1, "the authSafe")!
+    let info = cmsinfo.read(cmsder.raw(auth))!
+    let body = cmsder.octets(cmsinfo.content_of(info, OID_DATA)!)!
+    var mac_hash = ""
+    var mac_iterations = 0
+    var mac_present = false
+    if list.len(kids) > 2
+        let mac = cmsder.children(kids[2])!
+        let di = cmsder.children(cmsder.member(mac, 0, "the digest info")!)!
+        let alg = cmsder.alg_of(cmsder.member(di, 0, "the MAC algorithm")!)!
+        let want = cmsder.octets(cmsder.member(di, 1, "the MAC")!)!
+        let salt = cmsder.octets(cmsder.member(mac, 1, "the MAC salt")!)!
+        mac_iterations = 1
+        if list.len(mac) > 2
+            mac_iterations = cmsder.int_value(mac[2])!
+        if mac_iterations < 1 or mac_iterations > max_iterations
+            return Err(CmsBadKey("the MAC iteration count is ${mac_iterations}, the limit is ${max_iterations}"))
+        mac_hash = alg.oid
+        let got = mac_of(mac_hash, password, salt, mac_iterations, body)!
+        if not digest.ct_eq(got, want)
+            return Err(CmsAuthFailed)
+        mac_present = true
+    else if require_mac
+        return Err(CmsNoMatch("a MAC in the PFX"))
+    var safes: [P12Safe] = []
+    let seq = cmsder.expect(cmsder.root(body)!, 16, "the AuthenticatedSafe")!
+    for s in cmsder.children(seq)!
+        let safe = safe_read(s, password, max_iterations)!
+        list.push(safes, safe)
+    Ok(Pfx { version: version, safes: safes, mac_present: mac_present, mac_hash: mac_hash,
+             mac_iterations: mac_iterations })
+
+// Every bag of a kind, from every safe that was opened.
+pub fn bags_of_kind(pfx: Pfx, kind: Int) -> [P12Bag] []
+    var out: [P12Bag] = []
+    for s in pfx.safes
+        for b in s.bags
+            if b.kind == kind
+                list.push(out, b)
+    out
+
+// The values of the certificate bags that hold X.509 certificates, as DER.
+pub fn certificates(pfx: Pfx) -> [Bytes] []
+    var out: [Bytes] = []
+    for b in bags_of_kind(pfx, KIND_CERT)
+        if b.value_id == OID_X509_CERTIFICATE
+            list.push(out, bytes.clone(b.value))
+    out
+
+// The private keys that are in the clear, as PrivateKeyInfo DER: the key
+// bags, and the shrouded key bags that were opened.
+pub fn private_keys(pfx: Pfx) -> [Bytes] []
+    var out: [Bytes] = []
+    for b in bags_of_kind(pfx, KIND_KEY)
+        list.push(out, bytes.clone(b.value))
+    for b in bags_of_kind(pfx, KIND_SHROUDED_KEY)
+        if b.opened
+            list.push(out, bytes.clone(b.value))
+    out
+
+// ── writing ──────────────────────────────────────────────────────────
+
+// A certificate or a key to write, with its attributes.  `salt` and `iv` are
+// the PBES2 salt and the 16-byte IV of a key's shrouding and are unused for a
+// certificate.
+pub struct P12Entry
+    value: Bytes
+    friendly_name: Str
+    local_key_id: Bytes
+    salt: Bytes
+    iv: Bytes
+
+// What a write needs besides the entries: the password-based encryption of
+// the certificate safe, and the MAC.  All of it is the caller's, because this
+// package draws no random numbers.
+pub struct P12Params
+    cert_salt: Bytes
+    cert_iv: Bytes
+    pbkdf2_iterations: Int
+    mac_salt: Bytes
+    mac_iterations: Int
+
+fn attribute_set(e: P12Entry) -> Result<Bytes, CmsError>
+    var attrs: [Bytes] = []
+    if e.friendly_name != ""
+        let name = p12kdf.bmp_text(e.friendly_name)!
+        list.push(attrs, cmsder.seq([cmsder.oid(OID_FRIENDLY_NAME)!, cmsder.set_of([cmsder.tlv(30, name)])]))
+    if bytes.len(e.local_key_id) > 0
+        list.push(attrs, cmsder.seq([cmsder.oid(OID_LOCAL_KEY_ID)!, cmsder.set_of([cmsder.oct(e.local_key_id)])]))
+    Ok(cmsder.set_of(attrs))
+
+fn bag_write(bag_id: Str, value: Bytes, e: P12Entry) -> Result<Bytes, CmsError>
+    let attrs = attribute_set(e)!
+    Ok(cmsder.seq([cmsder.oid(bag_id)!, cmsder.ctx(0, value), attrs]))
+
+fn cert_bag(e: P12Entry) -> Result<Bytes, CmsError>
+    let inner = cmsder.seq([cmsder.oid(OID_X509_CERTIFICATE)!, cmsder.ctx(0, cmsder.oct(e.value))])
+    bag_write(OID_CERT_BAG, inner, e)
+
+fn shrouded_bag(e: P12Entry, password: Str, iterations: Int) -> Result<Bytes, CmsError>
+    let ct = p12pbe.encrypt(password, e.salt, iterations, e.iv, e.value)!
+    let alg = p12pbe.alg_id(e.salt, iterations, e.iv)!
+    bag_write(OID_SHROUDED_KEY_BAG, cmsder.seq([alg, cmsder.oct(ct)]), e)
+
+// A PFX holding `keys` shrouded under PBES2 in a `data` safe and `certs` in
+// an `encryptedData` safe under PBES2, with a HMAC-SHA-256 MAC: the layout
+// OpenSSL 3 writes.
+pub fn write(certs: [P12Entry], keys: [P12Entry], password: Str, p: P12Params) -> Result<Bytes, CmsError> []
+    if list.len(certs) + list.len(keys) == 0
+        return Err(CmsMalformed("a PFX holds at least one certificate or key"))
+    var safes: [Bytes] = []
+    if list.len(certs) > 0
+        var bags: [Bytes] = []
+        for c in certs
+            let b = cert_bag(c)!
+            list.push(bags, bytes.clone(b))
+        let plain = cmsder.seq(bags)
+        let ct = p12pbe.encrypt(password, p.cert_salt, p.pbkdf2_iterations, p.cert_iv, plain)!
+        let alg = p12pbe.alg_id(p.cert_salt, p.pbkdf2_iterations, p.cert_iv)!
+        let eci = cmsder.seq([cmsder.oid(OID_DATA)!, alg, cmsder.ctx_prim(0, ct)])
+        list.push(safes, cmsinfo.write(OID_ENCRYPTED_DATA, cmsder.seq([cmsder.int_u(0), eci]))!)
+    if list.len(keys) > 0
+        var bags: [Bytes] = []
+        for k in keys
+            let b = shrouded_bag(k, password, p.pbkdf2_iterations)!
+            list.push(bags, bytes.clone(b))
+        list.push(safes, cmsinfo.write(OID_DATA, cmsder.oct(cmsder.seq(bags)))!)
+    let body = cmsder.seq(safes)
+    let auth = cmsinfo.write(OID_DATA, cmsder.oct(body))!
+    let mac = mac_of(OID_SHA256, password, p.mac_salt, p.mac_iterations, body)!
+    let digest_info = cmsder.seq([cmsder.alg_id(OID_SHA256, Some(cmsder.null_value()))!, cmsder.oct(mac)])
+    let mac_data = cmsder.seq([digest_info, cmsder.oct(p.mac_salt), cmsder.int_u(p.mac_iterations)])
+    Ok(cmsder.seq([cmsder.int_u(3), auth, mac_data]))

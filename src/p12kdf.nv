@@ -1,0 +1,159 @@
+// p12kdf.nv — the password and the key derivation of PKCS #12.
+//
+// A PKCS #12 password is a BMPString: the password in UTF-16, big-endian,
+// followed by two zero octets (RFC 7292 appendix B.1).  The empty password
+// is the two zero octets.  A password-based encryption scheme that is not
+// from PKCS #12 (PBES2, RFC 8018) takes the password as its UTF-8 octets,
+// and `utf8` is that form.
+//
+// The derivation is the one of RFC 7292 appendix B.2.  It makes a key, an
+// initialization vector or a MAC key from a password, a salt and an
+// iteration count with a hash `H` of output length `u` and block length `v`:
+// a diversifier `D` of `v` copies of the purpose byte (1 for a key, 2 for an
+// IV, 3 for a MAC key), a string `I` of the salt and the password each
+// repeated to a whole number of blocks, and for each `u` octets wanted the
+// hash of `D || I` iterated, after which `I` is advanced by adding the hash
+// output, repeated to a block, and one to every block of `I`.
+
+use std.bytes
+use std.list
+use cmserr
+use cmsoid
+use cmscrypto
+
+// The password as the octets of its UTF-8 text, for PBES2.
+pub fn utf8(password: Str) -> Bytes []
+    bytes.from_str(password)
+
+// One code point decoded from UTF-8 at `at`: the value and the next offset,
+// or a value of -1 for an octet that does not start a well-formed sequence.
+fn decode_one(b: Bytes, at: Int) -> (Int, Int)
+    let c = bytes.byte_at(b, at) ?? 0
+    if c < 128
+        return (c, at + 1)
+    var extra = 0
+    var cp = 0
+    if c >= 192 and c < 224
+        extra = 1
+        cp = c - 192
+    else if c >= 224 and c < 240
+        extra = 2
+        cp = c - 224
+    else if c >= 240 and c < 248
+        extra = 3
+        cp = c - 240
+    else
+        return (0 - 1, at + 1)
+    if at + extra >= bytes.len(b)
+        return (0 - 1, bytes.len(b))
+    for i in 1..extra + 1
+        let k = bytes.byte_at(b, at + i) ?? 0
+        if k < 128 or k >= 192
+            return (0 - 1, at + 1)
+        cp = cp * 64 + (k - 128)
+    (cp, at + extra + 1)
+
+// Text as the octets of a BMPString, UTF-16 big-endian with no terminator,
+// or the refusal for text that is not well-formed UTF-8.
+pub fn bmp_text(text: Str) -> Result<Bytes, CmsError> []
+    let b = bytes.from_str(text)
+    var out = bytes.zeros(0)
+    var at = 0
+    for _i in 0..bytes.len(b) + 1
+        if at < bytes.len(b)
+            let r = decode_one(b, at)
+            if r.0 < 0
+                return Err(CmsMalformed("the text is not well-formed UTF-8"))
+            at = r.1
+            if r.0 >= 65536
+                let v = r.0 - 65536
+                out = bytes.concat([out, bytes.u16_be(55296 + v / 1024), bytes.u16_be(56320 + v % 1024)])
+            else
+                out = bytes.concat([out, bytes.u16_be(r.0)])
+    Ok(out)
+
+// The password as a BMPString with its terminating two zero octets.
+pub fn bmp_password(password: Str) -> Result<Bytes, CmsError> []
+    let t = bmp_text(password)!
+    Ok(bytes.concat([t, bytes.zeros(2)]))
+
+// The text a BMPString holds, or the refusal for octets that are not
+// UTF-16: an odd length or a lone surrogate.
+pub fn bmp_to_str(b: Bytes) -> Result<Str, CmsError> []
+    if bytes.len(b) % 2 != 0
+        return Err(CmsMalformed("a BMPString has an even number of octets"))
+    var out = ""
+    var at = 0
+    for _i in 0..bytes.len(b) / 2
+        if at < bytes.len(b)
+            let u = bytes.u16_be_at(b, at) ?? 0
+            at = at + 2
+            if u >= 55296 and u < 56320
+                let lo = bytes.u16_be_at(b, at) ?? 0
+                if at >= bytes.len(b) or lo < 56320 or lo >= 57344
+                    return Err(CmsMalformed("a BMPString has a lone surrogate"))
+                at = at + 2
+                out = out + str.from_char(65536 + (u - 55296) * 1024 + (lo - 56320))
+            else if u >= 56320 and u < 57344
+                return Err(CmsMalformed("a BMPString has a lone surrogate"))
+            else
+                out = out + str.from_char(u)
+    Ok(out)
+
+// The block length `v` of the hash, in octets.
+fn block_len(hash: Str) -> Int
+    if hash == OID_SHA384 or hash == OID_SHA512
+        128
+    else
+        64
+
+// `b` repeated and cut to `n` octets; empty when `b` is.
+fn repeated(b: Bytes, n: Int) -> Bytes
+    let len = bytes.len(b)
+    if len == 0 or n == 0
+        return bytes.zeros(0)
+    var out = bytes.zeros(n)
+    for i in 0..n
+        bytes.set_u8(out, i, bytes.byte_at(b, i % len) ?? 0)
+    out
+
+// `blocks * v` octets: `b` repeated to the next whole number of blocks.
+fn to_blocks(b: Bytes, v: Int) -> Bytes
+    let len = bytes.len(b)
+    repeated(b, (len + v - 1) / v * v)
+
+// Block `j` of `i` with `add` and one added to it, modulo 2^(8v), in place.
+fn add_into(var i: Bytes, j: Int, add: Bytes, v: Int)
+    var carry = 1
+    var k = v - 1
+    for _x in 0..v
+        let at = j * v + k
+        let sum = (bytes.byte_at(i, at) ?? 0) + (bytes.byte_at(add, k) ?? 0) + carry
+        bytes.set_u8(i, at, sum % 256)
+        carry = sum / 256
+        k = k - 1
+
+// `n` octets derived for the purpose `id` (1 key, 2 IV, 3 MAC key) from the
+// BMPString password, the salt and the iteration count, with the hash named
+// by its object identifier (SHA-1, SHA-256, SHA-384 or SHA-512).
+pub fn derive(hash: Str, id: Int, password: Bytes, salt: Bytes, iterations: Int, n: Int) -> Result<Bytes, CmsError> []
+    let u = cmscrypto.digest_len(hash)
+    if u == 0
+        return Err(CmsUnsupportedAlg(hash))
+    if iterations < 1 or n < 1
+        return Err(CmsBadKey("the iteration count and the length are positive"))
+    let v = block_len(hash)
+    let d = bytes.fill(bytes.zeros(v), 0, v, id)
+    var i = bytes.concat([to_blocks(salt, v), to_blocks(password, v)])
+    var out = bytes.zeros(0)
+    let c = (n + u - 1) / u
+    for round in 0..c
+        var a = cmscrypto.digest_of(hash, bytes.concat([d, i]))!
+        for _k in 1..iterations
+            a = cmscrypto.digest_of(hash, a)!
+        out = bytes.concat([out, a])
+        if round < c - 1
+            let b = repeated(a, v)
+            for j in 0..bytes.len(i) / v
+                add_into(var i, j, b, v)
+    Ok(bytes.slice(out, 0, n))
