@@ -130,6 +130,8 @@ fn test_the_key_derivation_of_appendix_b() [io]
     test.assert_eq_str(derived(OID_SHA256, 2, "sécret ☃ 😀", "0102030405060708", 7, 8), "b48f9bc2c74bf274")
     test.assert_eq_str(derived(OID_SHA384, 1, "", "0102030405060708", 3, 24), "c12b8dbf5bc341c9b761f01e7e71bb11f79973ff96a7e6d2")
     test.assert_eq_str(derived(OID_SHA512, 3, str.repeat("x", 100), str.repeat("01", 70), 2, 40), "69caf5f0a14a12d9d2040aa4d8d3bf057f1ebf08f06850e593cb0a5f1d957e446dea7a03600d6f2a")
+    test.case("an empty salt")
+    test.assert_eq(str.len(derived(OID_SHA1, 1, "x", "", 1, 8)), 16)
     test.case("refusals")
     test.assert_eq_str(derived("1.2.3", 1, "x", "00", 1, 8), "cms: algorithm 1.2.3 is not implemented")
     test.assert_eq_str(derived(OID_SHA1, 1, "x", "00", 0, 8), "cms: unusable key: the iteration count and the length are positive")
