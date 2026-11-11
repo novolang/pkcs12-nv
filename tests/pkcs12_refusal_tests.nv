@@ -212,3 +212,27 @@ fn test_pfx_refusals() [io]
     test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", t(48, t(48, algh(OID_SHA1) + octh(zeros(20))) + octh(zeros(8))))), "pw", 100, true)),
         "cms: the signature, digest or tag did not verify")
     test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", mac_data(OID_SHA1, 2))), bytes.to_str(h("ff")), 100, true)), "cms: malformed structure: the text is not well-formed UTF-8")
+
+@test
+fn test_the_smaller_functions_by_name() [io]
+    let salt = h("0102030405060708")
+    match p12pbe.alg_id(salt, 1000, bytes.zeros(16))
+        Err(e)  => test.fail(e.message())
+        Ok(alg) =>
+            match cmsder.root(alg)
+                Err(e)   => test.fail(e.message())
+                Ok(node) =>
+                    match p12pbe.read(node)
+                        Err(e)  => test.fail(e.message())
+                        Ok(pbe) =>
+                            test.assert_eq_str(pbe.oid, p12pbe.OID_PBES2)
+                            test.assert_eq_str(pbe.cipher, OID_AES256_CBC)
+                            test.assert_eq_str(pbe.prf, OID_HMAC_SHA256)
+                            test.assert_eq(pbe.iterations, 1000)
+    match pkcs12.mac_of(OID_SHA256, "pw", salt, 2, h("00"))
+        Ok(a)  =>
+            test.assert_eq(bytes.len(a), 32)
+            match pkcs12.mac_of(OID_SHA1, "pw", salt, 2, h("00"))
+                Ok(b)  => test.assert_eq(bytes.len(b), 20)
+                Err(e) => test.fail(e.message())
+        Err(e) => test.fail(e.message())

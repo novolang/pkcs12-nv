@@ -37,29 +37,42 @@ use p12pbe
 
 // ── object identifiers ───────────────────────────────────────────────
 
-// keyBag, shrouded key bag, certBag, crlBag, secretBag, safeContentsBag.
+// The object identifier of a keyBag: a PrivateKeyInfo in the clear.
 pub const OID_KEY_BAG = "1.2.840.113549.1.12.10.1.1"
+// The object identifier of a pkcs8ShroudedKeyBag.
 pub const OID_SHROUDED_KEY_BAG = "1.2.840.113549.1.12.10.1.2"
+// The object identifier of a certBag.
 pub const OID_CERT_BAG = "1.2.840.113549.1.12.10.1.3"
+// The object identifier of a crlBag.
 pub const OID_CRL_BAG = "1.2.840.113549.1.12.10.1.4"
+// The object identifier of a secretBag.
 pub const OID_SECRET_BAG = "1.2.840.113549.1.12.10.1.5"
+// The object identifier of a safeContentsBag.
 pub const OID_SAFE_CONTENTS_BAG = "1.2.840.113549.1.12.10.1.6"
-// x509Certificate and sdsiCertificate, the two certificate types of a certBag.
+// The certificate type x509Certificate of a certBag.
 pub const OID_X509_CERTIFICATE = "1.2.840.113549.1.9.22.1"
+// The certificate type sdsiCertificate of a certBag.
 pub const OID_SDSI_CERTIFICATE = "1.2.840.113549.1.9.22.2"
-// x509CRL.
+// The CRL type x509CRL of a crlBag.
 pub const OID_X509_CRL = "1.2.840.113549.1.9.23.1"
-// The attributes friendlyName and localKeyId.
+// The attribute friendlyName, a BMPString.
 pub const OID_FRIENDLY_NAME = "1.2.840.113549.1.9.20"
+// The attribute localKeyId, octets that tie a key to its certificate.
 pub const OID_LOCAL_KEY_ID = "1.2.840.113549.1.9.21"
 
-// The bag kinds of `P12Bag.kind`.
+// The `P12Bag.kind` of a keyBag.
 pub const KIND_KEY = 0
+// The kind of a pkcs8ShroudedKeyBag.
 pub const KIND_SHROUDED_KEY = 1
+// The kind of a certBag.
 pub const KIND_CERT = 2
+// The kind of a crlBag.
 pub const KIND_CRL = 3
+// The kind of a secretBag.
 pub const KIND_SECRET = 4
+// The kind of a safeContentsBag.
 pub const KIND_SAFE_CONTENTS = 5
+// The kind of a bag of a type this package does not know.
 pub const KIND_OTHER = 6
 
 // ── what is read ─────────────────────────────────────────────────────
