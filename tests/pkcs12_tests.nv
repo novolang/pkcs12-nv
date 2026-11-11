@@ -119,23 +119,29 @@ fn cert_rsa() -> Str
 @test
 fn test_the_key_derivation_of_appendix_b() [io]
     test.case("the vector of the PKCS #12 test suites: SHA-1, 'queeg', 1000 iterations")
-    test.assert_eq_str(derived(OID_SHA1, 1, "queeg", "1682c0fc5b3f7ec5", 1000, 24), "483dd6e919d7de2e8e648ba8f862f3fbfbdc2bcb2c02957f")
+    test.assert_eq_str(derived(OID_SHA1, 1, "queeg", "1682c0fc5b3f7ec5", 1000, 24),
+        "483dd6e919d7de2e8e648ba8f862f3fbfbdc2bcb2c02957f")
     test.assert_eq_str(derived(OID_SHA1, 2, "queeg", "1682c0fc5b3f7ec5", 1000, 8), "9d461d1b00355c50")
     test.assert_eq_str(derived(OID_SHA1, 3, "queeg", "1682c0fc5b3f7ec5", 1000, 40),
         "022db40d747da404972b3144296ba4b80a96b1f3fd171ab35c99bfdb77881b82c6583fb2c09587b2")
     test.case("an independent implementation: more than one output block, each hash, multi-block salt and password")
-    test.assert_eq_str(derived(OID_SHA1, 1, "smeg", "0a58cf64530d823b", 1, 24), "3ecfb31804b7d8d4306c686ddd816447615feb103b59bf49")
+    test.assert_eq_str(derived(OID_SHA1, 1, "smeg", "0a58cf64530d823b", 1, 24),
+        "3ecfb31804b7d8d4306c686ddd816447615feb103b59bf49")
     test.assert_eq_str(derived(OID_SHA256, 3, "smeg", "0a58cf64530d823b", 1, 40),
         "42e08f32ccab5b650351e21990f112bda599598df0836272730d9f10ef93cf76c692cfbe49bb6b2d")
     test.assert_eq_str(derived(OID_SHA256, 2, "sécret ☃ 😀", "0102030405060708", 7, 8), "b48f9bc2c74bf274")
-    test.assert_eq_str(derived(OID_SHA384, 1, "", "0102030405060708", 3, 24), "c12b8dbf5bc341c9b761f01e7e71bb11f79973ff96a7e6d2")
-    test.assert_eq_str(derived(OID_SHA512, 3, str.repeat("x", 100), str.repeat("01", 70), 2, 40), "69caf5f0a14a12d9d2040aa4d8d3bf057f1ebf08f06850e593cb0a5f1d957e446dea7a03600d6f2a")
+    test.assert_eq_str(derived(OID_SHA384, 1, "", "0102030405060708", 3, 24),
+        "c12b8dbf5bc341c9b761f01e7e71bb11f79973ff96a7e6d2")
+    test.assert_eq_str(derived(OID_SHA512, 3, str.repeat("x", 100), str.repeat("01", 70), 2, 40),
+        "69caf5f0a14a12d9d2040aa4d8d3bf057f1ebf08f06850e593cb0a5f1d957e446dea7a03600d6f2a")
     test.case("an empty salt")
     test.assert_eq(str.len(derived(OID_SHA1, 1, "x", "", 1, 8)), 16)
     test.case("refusals")
     test.assert_eq_str(derived("1.2.3", 1, "x", "00", 1, 8), "cms: algorithm 1.2.3 is not implemented")
-    test.assert_eq_str(derived(OID_SHA1, 1, "x", "00", 0, 8), "cms: unusable key: the iteration count and the length are positive")
-    test.assert_eq_str(derived(OID_SHA1, 1, "x", "00", 1, 0), "cms: unusable key: the iteration count and the length are positive")
+    test.assert_eq_str(derived(OID_SHA1, 1, "x", "00", 0, 8),
+        "cms: unusable key: the iteration count and the length are positive")
+    test.assert_eq_str(derived(OID_SHA1, 1, "x", "00", 1, 0),
+        "cms: unusable key: the iteration count and the length are positive")
 
 @test
 fn test_passwords_as_bmp_strings() [io]
@@ -154,13 +160,20 @@ fn test_passwords_as_bmp_strings() [io]
         Ok(s)  => test.assert_eq_str(s, "é☃😀")
         Err(e) => test.fail(e.message())
     test.case("text that is not UTF-8, and octets that are not UTF-16")
-    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("ff")))), "cms: malformed structure: the text is not well-formed UTF-8")
-    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("c3")))), "cms: malformed structure: the text is not well-formed UTF-8")
-    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("c328")))), "cms: malformed structure: the text is not well-formed UTF-8")
-    test.assert_eq_str(said(p12kdf.bmp_to_str(h("003000"))), "cms: malformed structure: a BMPString has an even number of octets")
-    test.assert_eq_str(said(p12kdf.bmp_to_str(h("d83d0041"))), "cms: malformed structure: a BMPString has a lone surrogate")
-    test.assert_eq_str(said(p12kdf.bmp_to_str(h("d83d"))), "cms: malformed structure: a BMPString has a lone surrogate")
-    test.assert_eq_str(said(p12kdf.bmp_to_str(h("de00"))), "cms: malformed structure: a BMPString has a lone surrogate")
+    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("ff")))),
+        "cms: malformed structure: the text is not well-formed UTF-8")
+    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("c3")))),
+        "cms: malformed structure: the text is not well-formed UTF-8")
+    test.assert_eq_str(said(p12kdf.bmp_text(bytes.to_str(h("c328")))),
+        "cms: malformed structure: the text is not well-formed UTF-8")
+    test.assert_eq_str(said(p12kdf.bmp_to_str(h("003000"))),
+        "cms: malformed structure: a BMPString has an even number of octets")
+    test.assert_eq_str(said(p12kdf.bmp_to_str(h("d83d0041"))),
+        "cms: malformed structure: a BMPString has a lone surrogate")
+    test.assert_eq_str(said(p12kdf.bmp_to_str(h("d83d"))),
+        "cms: malformed structure: a BMPString has a lone surrogate")
+    test.assert_eq_str(said(p12kdf.bmp_to_str(h("de00"))),
+        "cms: malformed structure: a BMPString has a lone surrogate")
     test.assert_eq_str(hex(p12kdf.utf8("é")), "c3a9")
 
 @test
@@ -194,10 +207,13 @@ fn test_openssl_3_default_file() [io]
     test.assert_eq_str(cert_bag.value_id, OID_X509_CERTIFICATE)
     test.assert_eq(list.len(pkcs12.bags_of_kind(pfx, KIND_CRL)), 0)
     test.case("a wrong password is the MAC")
-    test.assert_eq_str(said(pkcs12.read(h(modern()), "Secret", 100000, true)), "cms: the signature, digest or tag did not verify")
-    test.assert_eq_str(said(pkcs12.read(h(modern()), "", 100000, true)), "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(said(pkcs12.read(h(modern()), "Secret", 100000, true)),
+        "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(said(pkcs12.read(h(modern()), "", 100000, true)),
+        "cms: the signature, digest or tag did not verify")
     test.case("the iteration count is the writer's and the caller bounds it")
-    test.assert_eq_str(said(pkcs12.read(h(modern()), "secret", 2047, true)), "cms: unusable key: the MAC iteration count is 2048, the limit is 2047")
+    test.assert_eq_str(said(pkcs12.read(h(modern()), "secret", 2047, true)),
+        "cms: unusable key: the MAC iteration count is 2048, the limit is 2047")
 
 @test
 fn test_openssl_legacy_files_are_named_and_left_encrypted() [io]
@@ -220,13 +236,26 @@ fn test_openssl_legacy_files_are_named_and_left_encrypted() [io]
     let rc2_pfx = read_ok(rc2(), "secret")
     test.assert_eq_str(rc2_pfx.safes[0].algorithm, "1.2.840.113549.1.12.1.6")
     test.assert_eq(rc2_pfx.safes[0].opened, false)
-    test.assert_eq_str(said(pkcs12.read(h(rc2()), "wrong", 100000, true)), "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(said(pkcs12.read(h(rc2()), "wrong", 100000, true)),
+        "cms: the signature, digest or tag did not verify")
 
 @test
 fn test_files_written_here_read_back() [io]
-    let entry_cert = P12Entry { value: h(cert_ec()), friendly_name: "ünï", local_key_id: h("01020304"), salt: bytes.zeros(0), iv: bytes.zeros(0) }
-    let entry_cert2 = P12Entry { value: h(cert_rsa()), friendly_name: "", local_key_id: bytes.zeros(0), salt: bytes.zeros(0), iv: bytes.zeros(0) }
-    let entry_key = P12Entry { value: h(pkcs8_ec()), friendly_name: "ünï", local_key_id: h("01020304"), salt: h("0102030405060708"), iv: h("000102030405060708090a0b0c0d0e0f") }
+    let entry_cert = P12Entry { value: h(cert_ec()),
+        friendly_name: "ünï",
+        local_key_id: h("01020304"),
+        salt: bytes.zeros(0),
+        iv: bytes.zeros(0) }
+    let entry_cert2 = P12Entry { value: h(cert_rsa()),
+        friendly_name: "",
+        local_key_id: bytes.zeros(0),
+        salt: bytes.zeros(0),
+        iv: bytes.zeros(0) }
+    let entry_key = P12Entry { value: h(pkcs8_ec()),
+        friendly_name: "ünï",
+        local_key_id: h("01020304"),
+        salt: h("0102030405060708"),
+        iv: h("000102030405060708090a0b0c0d0e0f") }
     let params = P12Params { cert_salt: h("1112131415161718"), cert_iv: h("101112131415161718191a1b1c1d1e1f"), pbkdf2_iterations: 1000,
                              mac_salt: h("2122232425262728"), mac_iterations: 500 }
     match pkcs12.write([entry_cert, entry_cert2], [entry_key], "pässword", params)
@@ -240,7 +269,8 @@ fn test_files_written_here_read_back() [io]
             test.assert_eq_str(pkcs12.bags_of_kind(pfx, KIND_CERT)[0].friendly_name, "ünï")
             test.assert_eq_str(hex(pkcs12.bags_of_kind(pfx, KIND_SHROUDED_KEY)[0].local_key_id), "01020304")
             test.assert_eq(pfx.mac_iterations, 500)
-            test.assert_eq_str(said(pkcs12.read(b, "password", 100000, true)), "cms: the signature, digest or tag did not verify")
+            test.assert_eq_str(said(pkcs12.read(b, "password", 100000, true)),
+                "cms: the signature, digest or tag did not verify")
     test.case("only keys, only certificates")
     match pkcs12.write([], [entry_key], "pw", params)
         Err(e) => test.fail(e.message())
@@ -250,13 +280,29 @@ fn test_files_written_here_read_back() [io]
         Err(e) => test.fail(e.message())
         Ok(b)  => test.assert_eq(list.len(pkcs12.certificates(read_ok_pw(hex(b), "pw"))), 1)
     test.case("the writer's refusals")
-    test.assert_eq_str(said(pkcs12.write([], [], "pw", params)), "cms: malformed structure: a PFX holds at least one certificate or key")
-    let short_salt = P12Params { cert_salt: h("00"), cert_iv: h("101112131415161718191a1b1c1d1e1f"), pbkdf2_iterations: 1000, mac_salt: h("2122232425262728"), mac_iterations: 5 }
-    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], "pw", short_salt)), "cms: unusable key: the salt is at least 8 bytes")
-    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], bytes.to_str(h("ff")), params)), "cms: malformed structure: the text is not well-formed UTF-8")
-    test.assert_eq_str(said(pkcs12.write([entry_cert2], [P12Entry { value: h(pkcs8_ec()), friendly_name: bytes.to_str(h("ff")), local_key_id: bytes.zeros(0), salt: h("0102030405060708"), iv: bytes.zeros(16) }], "pw", params)),
+    test.assert_eq_str(said(pkcs12.write([], [], "pw", params)),
+        "cms: malformed structure: a PFX holds at least one certificate or key")
+    let short_salt = P12Params { cert_salt: h("00"),
+        cert_iv: h("101112131415161718191a1b1c1d1e1f"),
+        pbkdf2_iterations: 1000,
+        mac_salt: h("2122232425262728"),
+        mac_iterations: 5 }
+    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], "pw", short_salt)),
+        "cms: unusable key: the salt is at least 8 bytes")
+    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], bytes.to_str(h("ff")), params)),
         "cms: malformed structure: the text is not well-formed UTF-8")
-    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], "pw", P12Params { cert_salt: h("1112131415161718"), cert_iv: h("00"), pbkdf2_iterations: 1000, mac_salt: h("2122232425262728"), mac_iterations: 5 })),
+    test.assert_eq_str(said(pkcs12.write([entry_cert2], [P12Entry { value: h(pkcs8_ec()),
+        friendly_name: bytes.to_str(h("ff")),
+        local_key_id: bytes.zeros(0),
+        salt: h("0102030405060708"),
+        iv: bytes.zeros(16) }],
+    "pw", params)),
+        "cms: malformed structure: the text is not well-formed UTF-8")
+    test.assert_eq_str(said(pkcs12.write([entry_cert2], [], "pw", P12Params { cert_salt: h("1112131415161718"),
+        cert_iv: h("00"),
+        pbkdf2_iterations: 1000,
+        mac_salt: h("2122232425262728"),
+        mac_iterations: 5 })),
         "cms: unusable key: CBC takes a 16-byte IV and whole blocks")
 
 fn read_ok_pw(src: Str, password: Str) -> Pfx

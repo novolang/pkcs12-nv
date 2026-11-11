@@ -16,7 +16,6 @@
 // output, repeated to a block, and one to every block of `I`.
 
 use std.bytes
-use std.list
 use cmserr
 use cmsoid
 use cmscrypto
@@ -136,7 +135,8 @@ fn add_into(var i: Bytes, j: Int, add: Bytes, v: Int)
 // `n` octets derived for the purpose `id` (1 key, 2 IV, 3 MAC key) from the
 // BMPString password, the salt and the iteration count, with the hash named
 // by its object identifier (SHA-1, SHA-256, SHA-384 or SHA-512).
-pub fn derive(hash: Str, id: Int, password: Bytes, salt: Bytes, iterations: Int, n: Int) -> Result<Bytes, CmsError> []
+pub fn derive(hash: Str, id: Int, password: Bytes, salt: Bytes, iterations: Int,
+              n: Int) -> Result<Bytes, CmsError> []
     let u = cmscrypto.digest_len(hash)
     if u == 0
         return Err(CmsUnsupportedAlg(hash))

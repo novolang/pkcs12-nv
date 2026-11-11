@@ -39,7 +39,12 @@ pub struct P12Pbe
     iv: Bytes
 
 fn blank(oid: Str) -> P12Pbe
-    P12Pbe { oid: oid, salt: bytes.zeros(0), iterations: 0, prf: "", cipher: "", iv: bytes.zeros(0) }
+    P12Pbe { oid: oid,
+        salt: bytes.zeros(0),
+        iterations: 0,
+        prf: "",
+        cipher: "",
+        iv: bytes.zeros(0) }
 
 // Read an AlgorithmIdentifier of a password-based encryption scheme.
 pub fn read(alg: DerNode) -> Result<P12Pbe, CmsError> []
@@ -70,7 +75,12 @@ pub fn read(alg: DerNode) -> Result<P12Pbe, CmsError> []
                         None     => Err(CmsMalformed("the cipher parameters"))
                         Some(ip) =>
                             let iv = cmsder.octets(ip)!
-                            Ok(P12Pbe { oid: a.oid, salt: salt, iterations: count, prf: prf, cipher: scheme.oid, iv: iv })
+                            Ok(P12Pbe { oid: a.oid,
+                                salt: salt,
+                                iterations: count,
+                                prf: prf,
+                                cipher: scheme.oid,
+                                iv: iv })
 
 fn prf_of(oid: Str) -> Result<Pbkdf2Prf, CmsError>
     match oid
@@ -86,9 +96,10 @@ fn key_len(cipher: Str) -> Int
         "2.16.840.1.101.3.4.1.42" => 32
         _                         => 0
 
-fn derived_key(prf: Pbkdf2Prf, password: Str, salt: Bytes, count: Int, len: Int) -> Result<Bytes, CmsError>
+fn derived_key(prf: Pbkdf2Prf, password: Str, salt: Bytes, count: Int,
+               len: Int) -> Result<Bytes, CmsError>
     match pbkdf2params.allowing_below_floor(prf, count, len)
-        Err(e) => Err(CmsBadKey(e.message()))
+        Err(e)     => Err(CmsBadKey(e.message()))
         Ok(params) =>
             match pbkdf2kdf.derive(params, p12kdf.utf8(password), salt)
                 // cov: skip — `derive` refuses only parameters, which `allowing_below_floor` has accepted
@@ -98,7 +109,8 @@ fn derived_key(prf: Pbkdf2Prf, password: Str, salt: Bytes, count: Int, len: Int)
 // Decrypt with a scheme read by `read`.  The count is the sender's, so the
 // caller bounds it with `max_iterations`.  A legacy scheme is
 // `CmsNotImplemented`, naming it.
-pub fn decrypt(pbe: P12Pbe, password: Str, max_iterations: Int, ct: Bytes) -> Result<Bytes, CmsError> []
+pub fn decrypt(pbe: P12Pbe, password: Str, max_iterations: Int,
+               ct: Bytes) -> Result<Bytes, CmsError> []
     if pbe.oid != OID_PBES2
         return Err(CmsNotImplemented("the password-based encryption ${pbe.oid}: TripleDES and RC2 are not on the registry"))
     let klen = key_len(pbe.cipher)
@@ -120,7 +132,8 @@ pub fn alg_id(salt: Bytes, iterations: Int, iv: Bytes) -> Result<Bytes, CmsError
 
 // Encrypt with PBES2, PBKDF2-HMAC-SHA-256 and AES-256-CBC.  The salt, the
 // count and the 16-byte IV are the caller's.
-pub fn encrypt(password: Str, salt: Bytes, iterations: Int, iv: Bytes, plain: Bytes) -> Result<Bytes, CmsError> []
+pub fn encrypt(password: Str, salt: Bytes, iterations: Int, iv: Bytes,
+               plain: Bytes) -> Result<Bytes, CmsError> []
     if bytes.len(salt) < 8
         return Err(CmsBadKey("the salt is at least 8 bytes"))
     let key = derived_key(Pbkdf2HmacSha256, password, salt, iterations, 32)!

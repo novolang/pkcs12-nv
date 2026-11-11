@@ -204,17 +204,29 @@ fn safe_read(n: DerNode, password: Str, max_iterations: Int) -> Result<P12Safe, 
     let inner = cmsder.member(cmsder.children(wrapper)!, 0, "the safe content")!
     if ct == OID_DATA
         let bags = bags_of(cmsder.octets(inner)!, password, max_iterations)!
-        return Ok(P12Safe { encrypted: false, opened: true, algorithm: "", bags: bags, ciphertext: bytes.zeros(0) })
+        return Ok(P12Safe { encrypted: false,
+            opened: true,
+            algorithm: "",
+            bags: bags,
+            ciphertext: bytes.zeros(0) })
     if ct == OID_ENCRYPTED_DATA
         let parts = cmsder.children(inner)!
         let eci = cmsder.children(cmsder.member(parts, 1, "the EncryptedContentInfo")!)!
         let pbe = p12pbe.read(cmsder.member(eci, 1, "the encryption algorithm")!)!
         let enc = cmsder.octets(cmsder.member(eci, 2, "the encrypted content")!)!
         if pbe.oid != p12pbe.OID_PBES2
-            return Ok(P12Safe { encrypted: true, opened: false, algorithm: pbe.oid, bags: [], ciphertext: enc })
+            return Ok(P12Safe { encrypted: true,
+                opened: false,
+                algorithm: pbe.oid,
+                bags: [],
+                ciphertext: enc })
         let plain = p12pbe.decrypt(pbe, password, max_iterations, enc)!
         let bags = bags_of(plain, password, max_iterations)!
-        return Ok(P12Safe { encrypted: true, opened: true, algorithm: pbe.oid, bags: bags, ciphertext: bytes.zeros(0) })
+        return Ok(P12Safe { encrypted: true,
+            opened: true,
+            algorithm: pbe.oid,
+            bags: bags,
+            ciphertext: bytes.zeros(0) })
     Err(CmsWrongContentType(ct, "data or encrypted-data"))
 
 // ── the MAC ──────────────────────────────────────────────────────────
@@ -232,7 +244,8 @@ fn hmac(hash: Str, key: Bytes, msg: Bytes) -> Result<Bytes, CmsError>
         _                        => Err(CmsUnsupportedAlg(hash))
 
 // The MAC of the AuthenticatedSafe octets under the password.
-pub fn mac_of(hash: Str, password: Str, salt: Bytes, iterations: Int, safe: Bytes) -> Result<Bytes, CmsError> []
+pub fn mac_of(hash: Str, password: Str, salt: Bytes, iterations: Int,
+              safe: Bytes) -> Result<Bytes, CmsError> []
     let bmp = p12kdf.bmp_password(password)!
     let key = p12kdf.derive(hash, 3, bmp, salt, iterations, mac_key_len(hash))!
     hmac(hash, key, safe)
@@ -243,7 +256,8 @@ pub fn mac_of(hash: Str, password: Str, salt: Bytes, iterations: Int, safe: Byte
 // file are both `CmsAuthFailed`.  A PFX without a MAC is refused unless
 // `require_mac` is false.  `max_iterations` bounds the iteration count of the
 // MAC and of every PBKDF2 derivation, because the count is the writer's.
-pub fn read(src: Bytes, password: Str, max_iterations: Int, require_mac: Bool) -> Result<Pfx, CmsError> []
+pub fn read(src: Bytes, password: Str, max_iterations: Int,
+            require_mac: Bool) -> Result<Pfx, CmsError> []
     let top = cmsder.expect(cmsder.root(src)!, 16, "the PFX")!
     let kids = cmsder.children(top)!
     let version = cmsder.int_value(cmsder.member(kids, 0, "the version")!)!
@@ -337,7 +351,8 @@ fn attribute_set(e: P12Entry) -> Result<Bytes, CmsError>
         let name = p12kdf.bmp_text(e.friendly_name)!
         list.push(attrs, cmsder.seq([cmsder.oid(OID_FRIENDLY_NAME)!, cmsder.set_of([cmsder.tlv(30, name)])]))
     if bytes.len(e.local_key_id) > 0
-        list.push(attrs, cmsder.seq([cmsder.oid(OID_LOCAL_KEY_ID)!, cmsder.set_of([cmsder.oct(e.local_key_id)])]))
+        list.push(attrs,
+            cmsder.seq([cmsder.oid(OID_LOCAL_KEY_ID)!, cmsder.set_of([cmsder.oct(e.local_key_id)])]))
     Ok(cmsder.set_of(attrs))
 
 fn bag_write(bag_id: Str, value: Bytes, e: P12Entry) -> Result<Bytes, CmsError>
@@ -356,7 +371,8 @@ fn shrouded_bag(e: P12Entry, password: Str, iterations: Int) -> Result<Bytes, Cm
 // A PFX holding `keys` shrouded under PBES2 in a `data` safe and `certs` in
 // an `encryptedData` safe under PBES2, with a HMAC-SHA-256 MAC: the layout
 // OpenSSL 3 writes.
-pub fn write(certs: [P12Entry], keys: [P12Entry], password: Str, p: P12Params) -> Result<Bytes, CmsError> []
+pub fn write(certs: [P12Entry], keys: [P12Entry], password: Str,
+             p: P12Params) -> Result<Bytes, CmsError> []
     if list.len(certs) + list.len(keys) == 0
         return Err(CmsMalformed("a PFX holds at least one certificate or key"))
     var safes: [Bytes] = []
