@@ -1,0 +1,214 @@
+// pkcs12_refusal_tests.nv — what the PFX reader refuses, with crafted structures.
+//
+// The pieces are small DER structures written out in the test; the key
+// bag of the "pkcs8_ec" vector comes from the other suite.
+
+use std.test
+use std.bytes
+use std.list
+use cmserr
+use cmsoid
+use cmsder
+use cmsinfo
+use p12kdf
+use p12pbe
+use pkcs12
+
+fn said<T>(r: Result<T, CmsError>) -> Str
+    match r
+        Ok(_)  => "ok"
+        Err(e) => e.message()
+
+fn h(s: Str) -> Bytes
+    bytes.from_hex(s) ?? bytes.zeros(0)
+
+fn hex(b: Bytes) -> Str
+    bytes.to_hex(b)
+
+fn must(r: Result<Bytes, CmsError>) -> Bytes
+    match r
+        Ok(b)  => bytes.clone(b)
+        Err(e) =>
+            test.fail(e.message())
+            bytes.zeros(0)
+
+fn t(tag: Int, body: Str) -> Str
+    hex(cmsder.tlv(tag, h(body)))
+
+fn oidh(text: Str) -> Str
+    hex(must(cmsder.oid(text)))
+
+fn algh(text: Str) -> Str
+    t(48, oidh(text))
+
+fn algp(text: Str, params: Str) -> Str
+    t(48, oidh(text) + params)
+
+fn inth(n: Int) -> Str
+    hex(cmsder.int_u(n))
+
+fn octh(body: Str) -> Str
+    t(4, body)
+
+fn zeros(n: Int) -> Str
+    hex(bytes.zeros(n))
+
+fn read_ok(src: Str, password: Str) -> Pfx
+    match pkcs12.read(h(src), password, 100000, true)
+        Ok(p)  => p
+        Err(e) =>
+            test.fail(e.message())
+            Pfx { version: 0, safes: [], mac_present: false, mac_hash: "", mac_iterations: 0 }
+
+fn derived(hash: Str, id: Int, password: Str, salt: Str, it: Int, n: Int) -> Str
+    match p12kdf.bmp_password(password)
+        Err(e)  => e.message()
+        Ok(bmp) =>
+            match p12kdf.derive(hash, id, bmp, h(salt), it, n)
+                Ok(b)  => hex(b)
+                Err(e) => e.message()
+
+// A PFX without a MAC around the given AuthenticatedSafe members.
+fn bare_pfx(safes: Str) -> Str
+    t(48, inth(3) + hex(must(cmsinfo.write(OID_DATA, cmsder.oct(h(t(48, safes)))))))
+
+// A data safe holding the given SafeBags.
+fn data_safe(bags: Str) -> Str
+    hex(must(cmsinfo.write(OID_DATA, cmsder.oct(h(t(48, bags))))))
+
+fn bag(id: Str, value: Str, attrs: Str) -> Str
+    t(48, oidh(id) + t(160, value) + attrs)
+
+fn read_bare(safes: Str) -> Str
+    said(pkcs12.read(h(bare_pfx(safes)), "pw", 100000, false))
+
+fn modern() -> Str
+    "308207b30201033082076906092a864886f70d010701a082075a0482075630820752308205e206092a864886f70d010706a08205d3308205cf020100308205c806092a864886f70d010701305706092a864886f70d01050d304a302906092a864886f70d01050c301c0408fdd9135a07f89a0902020800300c06082a864886f70d02090500301d060960864801650304012a04109ffed61cc33e4b14007462ee1f2efb5b80820560fe859908f9f68946030b6045bf15be0bb74819851a59beb85239ce2c584d54ae6530459384ef6909163f2d26d5b7534b52bd0d9de57b5b057f863087b57494191b4fbd45e769abb0ba08ced053d3f3392c90682187aa112fd7ff765feef0f5ad3c9bcefdc16a82ccc852be4da9a89c4e63474fb40e31779893db82bbea0ac63f93f199c59e6502160250437a708d255e0199a7157ed5c3bb7594df9a07c39a0f3592ff037255abfb81eb8a6ff99a62e054cac12fd81efe0e81849aca14ad8664465c781d8fd7d125cd3ba6824eaf8b1b95a3667a198fd099609fb2c2ed6c06a454a4b89302d45bb80bae90b6b4a1839ed96076b7ad8ac16861d0040a7e35622b9a1a2c9cce5f5dcaf7ce101839cad54824c75fcce4c0ace8d7ecffa02b4da7e65bf4b82f5ffbf5fe6d0afc5563c4a02ca2073b9dea2a8e1267368db0dda3764b210a1e07c125c876419607fbe0a34e897500c62ee627331e35e01c14e83c7cf98cd193e6eb511c5d6f280aa709ab9aaa6a7c15da931747d9d959ae00bb7ab698b2964b29730dfa40be76c780d0eab791fe8392ad889bb77c135693f6a67f27d63bcb008c1dfd085e2f92efb3499bf55f6cadcb26135d11ff342dee6ec55bc80254ab3afc5caa6796966b84094dc98a8d85a137b61c9e176de895eff0f082ee4c7d185647231bd4ecc72437eaa8bd75e3aaf943dddfd1ce8bd5edba600124c4f6e56dfcf66c4c6125a8a19f94eba7e831a240c05415bbabf2d6f472c01be7e8e9a7955fd2e2275d2ccbf61d8032d509cd9307da45a7d2912e8d6cb7a0c3b282389b2f1acd2e0196bcb06ebee3a30c8d63d88d142696ff20501614ff494c2dc6674f406e1586a95d90666c2e191819b12dbd1ef38cda360554e9bb8abd227159386e110dae862f528b6c2e00e7a9c84b079727369f822b863d59cbae2822ca6455edc6bc3db7ca9b8feb835c91f44efb9e02f278904514f447d3ada8806ca6919e0dab2db7d2fb20978cb3fada7e8356dcea8af9d1385959ff9b94b5fdf9fe42fbb86c254286a92de06edc9fbcf9f119a02cbcf2a4466114a4d5e3a95898cf2fdb7e1a90e58e00e9f019bf26b89401f4f2c119deb126ce93fdd444be2331b1fbf1cce2c34969819f1abba4a0e5e2d0924f475326588e1e0755aede2fef7b05337396b0b7d7b9a1f5198a300d17036b23ed8b51a816fcce95641846207f6c58d5623da73028e3fd64f7373d529bc625d1f73a709b2c2f5da02c8f05a3a58028d74c374a6c23a8e646542b27c5f606a3d485b98291a6b2660d773d529ba6d8683345f1b0dc9dd7fcee874b9590bf695ac3f20b1e2e7ac69e4dbd832298d492f02214cb6d8c43c17e5dcd80915423346a5ffbcc92b8dc631ad259fe4046924cc5d01eef7a309080a4ad7d38f1e1e1359c5a86a28716b8cbbb5b2b1e449aee91ca6dab417068b2f07e06471b314f4fe71f2a60ee1d23020199ecac266d2f7e53bb4d5b230425c9d8f279c14c4d18005a13cee7d3f60cb8ce137e5f85d0944d8ac141d6897080fb4fceacd302c80beef03c274d525e501ed2bee1b9846082279ae140af0c7c87f534163be1bcd6fe77b6501cfa67a2b050a8c0bda264a8edd9598f0ea583984d291508463c57920f1fae9bc83703c8a27a21b8cab56bfc0221c5e215d347297a00da941c1e3aedfd655b30e49dae260d9888d699b0129ec00c61a54a6e3993c50a212f522da0195d05fb65e8ddda268ced4c3d57fd165b8049b12d85a5dc637c35db695f7154d7ec6f6e8fa4c1d969319767bf349cf6052c3a6499a3c9a396273228bdbe454c108d84096b51ca47ad6af2be0c5e7435e8b4ddad433a26ffc609a83d674f1e1a27092c47c0a1ffd44951027b61af73c8954daa7f2d8566b7e67844606cf48bf9d9958bbaed67f813033f8822ce78757a157a3c026033913082016806092a864886f70d010701a082015904820155308201513082014d060b2a864886f70d010c0a0102a081ef3081ec305706092a864886f70d01050d304a302906092a864886f70d01050c301c0408fd1b5d6f71850a1002020800300c06082a864886f70d02090500301d060960864801650304012a04106232ab2b5a736c3820de70af5ec5e3450481900711fc45ce5b12e45625360f27188207af0bbe4d37b075dc222a5e564673783709fe3c592af8db20bcd2ad86f88e137ee0a6f2d06779c6a28418675c4849ef2d91809f3ae76d63dbc9948adaa001e26ae0e4a87a0893f37312815cc32335b753f5ee2dc833fa6ed0b16db9b0c1a394c19cdf265f305a124691600a88379cde597b54d06cec76793a0a7135d0df3f7fc3314c302306092a864886f70d01091531160414379fcf15c0eb308b54c623ec988c82ddeb26940c302506092a864886f70d01091431181e160063006d0073002d006e00760020007400650073007430413031300d060960864801650304020105000420dc8c515fd4c9e41c044d42f6d2af4852c1a5b2273f39779cf1b9a86f34f001650408deb10c53b378e8d802020800"
+
+fn des3() -> Str
+    "30820725020103308206eb06092a864886f70d010701a08206dc048206d8308206d43082059f06092a864886f70d010706a08205903082058c0201003082058506092a864886f70d010701301c060a2a864886f70d010c0103300e04085cfc6b51afaefdb702020800808205588820a510107627a5dffdad0c62f00a859472783189e6b1887b12e88459bfe8bc003af4a40b24860c13fa76b370f9ee923331ff201c6f0ba87c290f4af29a19996b0de1457ed496528ff71520214ca9543a53c68d08cfc53f520f87d251ce50ae72f6a997b008d65d770b21ca78b12afd0be35f64d74fee57739f7a85a0d1cc57c4fe222f640122a9a77a57a388c7e16008bef36e8a505d1001d7be398dc0f14a86cf66f39245c4cb63127a230720d5200df82a3cc4e58b15b695b314f77c69d84f495cd96b01e6aa91d6cd547f96013e659367b86b921bf13306355e6c33cda5510156d6f06e1e40734a643ebc800c7a5d3ed3ee2bdccfbe05bea6b7acdd91eef89b19ad9784d0134df876c99b89f6beb7ad2af686b371115e1ffe783a873adfd028649b29e4b50b22d75a2f51384be761151a55a5e32a8874a22ceedf2fd4a949b6eff01061dde02f71b87501d88b39fa7603b60f2761b4ce97bd85cadff7f2da658aa49e917004f4758d641121949490c455fabd0a022e31b7d10df24bfd20fb0b1eebff6ffeba3979c6a6105a14daafb986e2e7babe29efd092ee798b3e3a194fdf8e72c2ca0245b61344dabb3ac31eecba65b553ae7ba0da0b033adda8d4400a3849d459722b05c364163d0c37f6a2ce69cafbbca06fe00275ab21da5c1c3e889d7f472fcaa8d5f76ed9acddc9c466c338f8659caf5b140dcfa488b3cbbbc251afde89144ef38a17ab850cc74048010a15c1642ec652c0df2252a27f01ed7cfb9f7408299b3da655484de72995dfa476596c0af25e337e39c8022434033e3b6cd4f8a48c72845b843b64f371b1be64b726fc17bd85368a1f89c10fe525f500ffbce4e063bcdc7538ad73650c958c6924f7d824663a06a64678b0f64cef6946928c116706a75db8b8ad29d11f4718e14b85a457a48559554270f91bc92271ec1346233ded783662f324e6257adfb38f29a5c0719a7982ab0b7b77690142832b2f43025c12113a5b9c3809d067ee40da5ad246fd718935c4e775ace1b4a396b8cefd6036d212329975899a8e9508c7182efb3c6611da5f993b548cf5ee05f43ec39d470bdf5399cba6be5e8ae9f56ce2987612faa28b1bb6d1a9b85c373d95c116a2908e0ed232cd87aa2f12abffc162725ea1def8e1bc50e2d53cc5d92d3672ec99841439e406a2bc867d5640d7ad12a3bdeaa051cebc04d5ddcf22ef099e5080d33b7cc4f9fdd097facd39f7301edebbe49b4c923f9afd01d2666a129a26163242d97737e9b3a72ff5e13c3fd9ca0af59b159c56c3853111c951863b4a2b8870014403a063571e1e0df8b548206e1ca27b3ad4e047af646690dc2f5a6a70d1e00d0c5390b653d41149ccefb0929e63aa4b4aa15c1b6f3a9aa5f47a53f77db28cb0ee1009121a30232a626c82eec6d41ccbc41ccdfe8ebb205c721f8ce552a574957d278a6595f90a2805cc68110546188fa9b9189de31b678a1b09a99ed1ff3e15e3330f20aafbd29f3024e98ab86d5c675063818be6d5bce18308b2a3d27d9f98747ef2d840f2f42d75d59e3793ee1df4cf04f0800e0179be9ce6d6263fb4f3fbe54721717ef5359088c187ecca532fc046fabbbedf5d455b9fde96af9ec7707b42f0aaf6bd831590c9bf200c0678e4f49dffbfec4152f568c2e372ba6164fcedc3b8d8b9e1ec5ce5c3e854572b6739b5af99db47482acc53b0e0a68133025fda0ecf64de5866a866ae4a6aca2e02ee0c800ba11074390e2bef2a8531c79a2cc31a0ab8e4c7f98e42a359d3f3547d1109edff470e49d2e4d09db14b21b2ef2de3520054eeba3e0bc71c723d5c68784ef3b5eb542b842194bebf488585e3ea084d31f1e22f904ea74455d629d739215a76163e0a05ad4d298483db6a58c9efcc0940bd1e33ebdd5c5f2931559e614c1471dc07e019ad3082012d06092a864886f70d010701a082011e0482011a3082011630820112060b2a864886f70d010c0a0102a081b43081b1301c060a2a864886f70d010c0103300e0408cc658260ed234d4302020800048190a9a89bcfbfad76bbff71cb61509354aa06076339dc63344c94aa005d4e5b18a4bbe51083348f58f9e26622b6e13509270c3c6075962f62564d75e5f8def34b6e35a356d288848c1d5b5de30dba5972c8c40922b22a88b584a035772ce003f5d392aa626123179f7411abf3fddfe371b94117c26aa350d2f1bc5bf35428dc36f6fc3ed7c88d6a90dfd55ad47389f65296314c302306092a864886f70d01091531160414379fcf15c0eb308b54c623ec988c82ddeb26940c302506092a864886f70d01091431181e160063006d0073002d006e00760020007400650073007430313021300906052b0e03021a05000414b885676ceeeb01ea04b5c4c69e2715a27896d6fa040830e02f90c3eff8fd02020800"
+
+fn rc2() -> Str
+    "308203dd020103308203a306092a864886f70d010701a0820394048203903082038c3082025706092a864886f70d010706a0820248308202440201003082023d06092a864886f70d010701301c060a2a864886f70d010c0106300e04088ac2e2e2b0b837dd02020800808202108767fc01089eddec31bf487963e1a16917b770eae4bae377667b1d45acd9d7ac6d3795b9aab0ec2c72c09a3d3d6eb590783b6496f79363247c278e0f9ddc446405bdf59c59187d70734c0596009b8a6981542eb7bc26869bd8cdedbc920e3e2078acfc5a7ff995a75d0dabe12ac392673d846d382346f92c3e013a7e1bf442e6d922a03f17146c4211fbf69b004fda225c4b2190086d9ffbf8b8eacec871bd0697fde9382181c2a94e097264ea57195ea3ec211d3e61b084dc44ffccc23fed953538d20d7964aff642df4a7ca3c9146da8c3565767bd4ceee355f7dd15a7b1084ca45558a963e3d01b1262a8e5046eff6e136ef62ef11af307594d33ec6eaeaa7e0734a39c994da9d061bca1af2899d9452605e3802c64d81643d061e8744e0d8a433ff76f39407551c598093d77d5257aa9e6af3569abe7ffcaa77278680cb45e8139cbda64b97e0784a42c008f39b6c4e0021ba60d5306fad4a19d0f86ab0e97e2024982afe9be415f4019dd4d6d553e0a93494c2770e49096625efa18d3287c6a0270da95c779ba34560c14c4f87a3ba200cf9a7ca58ce2583658a6ed4437ebcc8dfd7e95ad91d0bbcc098063d57326dab080b9a9770b962e3eb45a83f1c8151adf8c1f8cde92a808ec95ad97d4f540f1f81b7063c4340b11e9af90e1f0b64aa04ac84088662a34b0703bb52a9eaf1f180a35af1a7e0a598abc902724e5ed6612e060747ad29fdb6efdb04f8071c13082012d06092a864886f70d010701a082011e0482011a3082011630820112060b2a864886f70d010c0a0102a081b43081b1301c060a2a864886f70d010c0103300e04083e88193fd883c1ca0202080004819069b3990e2bbd8ac3f6fdae47d83887b09ac78a0eaa039d2302932f8f45ef494f69cba477901c13207dd1e77833559ff2714a40b33dd320403afe5fac82fbce8ab8aca950da3917a40e1674888c2545efa8eedfc2c8b7242665471295f7473a5b85e514e516ee2751c7269618f6eaf95dde7a0ec68089010ca29dada91a25025e75caea0bf4d0930c508499666c764a41314c302306092a864886f70d01091531160414379fcf15c0eb308b54c623ec988c82ddeb26940c302506092a864886f70d01091431181e160063006d0073002d006e00760020007400650073007430313021300906052b0e03021a050004147fa586b3830ac4a52f1abe291f7ae55ee5a0630f0408900880a374615b0902020800"
+
+fn pkcs8_ec() -> Str
+    "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b020101042032383af9d7c4b0f918a2c374bbbc277d537a383d959b9135070382d7bfb15230a14403420004572e9238470c66a216ac0e3162c59f5dbb2b4de4632f4f37c5490ebebfb5cb60e1aa3f7f826ecf8ce3a298ea38c611749c5dff7b3a7705d9bf3622cf6d11635d"
+
+fn cert_ec() -> Str
+    "308201893082012fa00302010202146a35613cf1100f844a551d5858091de8125c8106300a06082a8648ce3d04030230193117301506035504030c0e636d732d6e7620656320746573743020170d3236313131313038353831305a180f32313236313031383038353831305a30193117301506035504030c0e636d732d6e7620656320746573743059301306072a8648ce3d020106082a8648ce3d03010703420004572e9238470c66a216ac0e3162c59f5dbb2b4de4632f4f37c5490ebebfb5cb60e1aa3f7f826ecf8ce3a298ea38c611749c5dff7b3a7705d9bf3622cf6d11635da3533051301d0603551d0e041604143917b027f008ae25cef197b741e628dd9b7f7db7301f0603551d230418301680143917b027f008ae25cef197b741e628dd9b7f7db7300f0603551d130101ff040530030101ff300a06082a8648ce3d040302034800304502207d70e951bb88e7262349dd3bd76661db1430c13b29b98b4307ec73a93c0688e0022100a3090ac21986e33c2853b3c814cf34824fe74de548ef97964ee5440dec737e55"
+
+fn cert_rsa() -> Str
+    "30820317308201ffa00302010202141dd66bf0d588dbe5cfa6c64a6cd3f3787f7d29d3300d06092a864886f70d01010b0500301a3118301606035504030c0f636d732d6e762072736120746573743020170d3236313131313038353831305a180f32313236313031383038353831305a301a3118301606035504030c0f636d732d6e7620727361207465737430820122300d06092a864886f70d01010105000382010f003082010a0282010100c54ebfb4a209d1c5c335f2bea8c1d8b3ce8f7a300b0488ed1dfcb948de24ca9bb42e1f655af35cc52c3991e10042317137103dacf983671cd027205cd6bab6b00bda91c1e657287bc40db122f4c77a30229e8b17aa0710d5d1f6a203e769e111edc9648f8de69780a0c4f0d427090c5bda02d640a3e77c21e1be3e7aeb144e4f0e7a731ab8fefccd9361007da65c3bfa28d89a771d068fe63919c6b4fddd6a2068beb4115ef5665df93e5d40c23fde727a2ac65dc62e46f5add87884e1c389f60480ee119c4077101f8947f98586a5ad6222ab3b53ac20497cd14f4e178d894c9884acc53e76e2bdd667724bb0da7eda3cb4958619fb41aa0de0223bad113ce10203010001a3533051301d0603551d0e04160414625ade34dc155decd30a63d3085b0c28b8a62e0b301f0603551d23041830168014625ade34dc155decd30a63d3085b0c28b8a62e0b300f0603551d130101ff040530030101ff300d06092a864886f70d01010b05000382010100a6886fb73ea6430e1a0db699c478a74a897c39667edf7d3b7c8217b3cbe88f8b1b2c0bc2d1ad8e3b1f094904b7a7e842de9c814e98a5da1e8f3a8f2902a75157fc0efcaa474c7d20082000f750e03ba0e11d4b2bb0742cd691d08a3145536b6c35f03f6fae2406b9fa160b0b8ec2358646a8a5ed76d3cea90f77f672b89f74212f27056023a0be2ca8bab90ea72c4a41b2892b1ff3d558c0ca7943a30d932fa938c984dd052278f841b3504ca11a7fd23fd61479761d2090e507011ff913002cf57589b69c3fdc88299db5cc8b65e55dd153f75904fe3ad0279ab512d3f5437d65e968fc7562c08a2216fcba4932af2ec2193a7b2ffb46e420e226bf7cd30429"
+
+fn pfx_with(version: Int, safes: Str, tail: Str) -> Str
+    t(48, inth(version) + hex(must(cmsinfo.write(OID_DATA, cmsder.oct(h(t(48, safes)))))) + tail)
+
+fn mac_data(hash: Str, iterations: Int) -> Str
+    t(48, t(48, algh(hash) + octh(zeros(20))) + octh(zeros(8)) + inth(iterations))
+
+// An encrypted-data safe from its algorithm identifier and ciphertext.
+fn enc_safe(alg: Str) -> Str
+    hex(must(cmsinfo.write(OID_ENCRYPTED_DATA, cmsder.seq([cmsder.int_u(0), cmsder.seq([must(cmsder.oid(OID_DATA)), h(alg), cmsder.ctx_prim(0, bytes.zeros(32))])]))))
+
+fn pbes2(kdf: Str, scheme: Str) -> Str
+    algp(p12pbe.OID_PBES2, t(48, kdf + scheme))
+
+fn pbkdf2(params: Str) -> Str
+    algp(OID_PBKDF2, params)
+
+fn std_salt() -> Str
+    octh(zeros(8))
+
+fn cipher128() -> Str
+    algp(OID_AES128_CBC, octh(zeros(16)))
+
+fn enc_said(alg: Str) -> Str
+    read_bare(enc_safe(alg))
+
+@test
+fn test_password_based_encryption_refusals() [io]
+    let ok_kdf = pbkdf2(t(48, std_salt() + inth(1000)))
+    test.case("the shape of PBES2")
+    test.assert_eq_str(enc_said(algh(p12pbe.OID_PBES2)), "cms: malformed structure: the PBES2 parameters")
+    test.assert_eq_str(enc_said(pbes2(algh("1.2.3"), cipher128())), "cms: algorithm 1.2.3 is not implemented")
+    test.assert_eq_str(enc_said(pbes2(algh(OID_PBKDF2), cipher128())), "cms: malformed structure: the PBKDF2 parameters")
+    test.assert_eq_str(enc_said(pbes2(ok_kdf, algh(OID_AES128_CBC))), "cms: malformed structure: the cipher parameters")
+    test.case("the cipher and the pseudorandom function")
+    test.assert_eq_str(enc_said(pbes2(ok_kdf, algp("1.2.3", octh(zeros(16))))), "cms: algorithm 1.2.3 is not implemented")
+    test.assert_eq_str(enc_said(pbes2(pbkdf2(t(48, std_salt() + inth(1000) + inth(24) + algp(OID_HMAC_SHA512, "0500"))), algp(OID_AES192_CBC, octh(zeros(16))))),
+        "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(enc_said(pbes2(pbkdf2(t(48, std_salt() + inth(1000) + algp(OID_HMAC_SHA1, "0500"))), cipher128())),
+        "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(enc_said(pbes2(pbkdf2(t(48, std_salt() + inth(1000) + algp("1.2.3", "0500"))), cipher128())), "cms: algorithm 1.2.3 is not implemented")
+    test.case("the iteration count, bounded by the caller")
+    test.assert_eq_str(enc_said(pbes2(pbkdf2(t(48, std_salt() + inth(0))), cipher128())), "cms: unusable key: the iteration count is 0, the limit is 100000")
+    test.assert_eq_str(enc_said(pbes2(pbkdf2(t(48, std_salt() + inth(100001))), cipher128())), "cms: unusable key: the iteration count is 100001, the limit is 100000")
+    test.case("a legacy scheme asked to decrypt directly")
+    match cmsder.root(h(algh("1.2.840.113549.1.12.1.3")))
+        Err(e)   => test.fail(e.message())
+        Ok(node) =>
+            match p12pbe.read(node)
+                Err(e)  => test.fail(e.message())
+                Ok(pbe) =>
+                    test.assert_eq_str(said(p12pbe.decrypt(pbe, "pw", 100, bytes.zeros(32))),
+                        "cms: not implemented: the password-based encryption 1.2.840.113549.1.12.1.3: TripleDES and RC2 are not on the registry")
+    test.case("encrypting with a count of zero and a short salt")
+    test.assert_eq_str(said(p12pbe.encrypt("pw", h("0102030405060708"), 0, bytes.zeros(16), bytes.zeros(1))), "cms: unusable key: pbkdf2: 0 is not a positive count")
+    test.assert_eq_str(said(p12pbe.encrypt("pw", h("01"), 1000, bytes.zeros(16), bytes.zeros(1))), "cms: unusable key: the salt is at least 8 bytes")
+
+fn nested_key_bag() -> Str
+    bag(OID_KEY_BAG, pkcs8_ec(), "")
+
+@test
+fn test_bag_kinds_and_shapes() [io]
+    let secret = bag(OID_SECRET_BAG, t(48, oidh("1.2.3") + t(160, octh("aa"))), "")
+    let crl = bag(OID_CRL_BAG, t(48, oidh(OID_X509_CRL) + t(160, octh("3000"))), "")
+    let nested = bag(OID_SAFE_CONTENTS_BAG, t(48, nested_key_bag()), "")
+    let sdsi = bag(OID_CERT_BAG, t(48, oidh(OID_SDSI_CERTIFICATE) + t(160, octh("aabb"))), "")
+    let other = bag("1.2.3", "0500", "")
+    let pfx = read_ok_bare(data_safe(secret + crl + nested + sdsi + other + nested_key_bag()))
+    test.assert_eq(list.len(pfx.safes[0].bags), 6)
+    test.assert_eq(list.len(pkcs12.bags_of_kind(pfx, KIND_SECRET)), 1)
+    test.assert_eq_str(pkcs12.bags_of_kind(pfx, KIND_SECRET)[0].value_id, "1.2.3")
+    test.assert_eq_str(hex(pkcs12.bags_of_kind(pfx, KIND_SECRET)[0].value), "0401aa")
+    test.assert_eq_str(hex(pkcs12.bags_of_kind(pfx, KIND_CRL)[0].value), "3000")
+    test.assert_eq(list.len(pkcs12.bags_of_kind(pfx, KIND_OTHER)), 1)
+    test.case("an SDSI certificate is handed out as its octets and is not an X.509 certificate")
+    test.assert_eq_str(hex(pkcs12.bags_of_kind(pfx, KIND_CERT)[0].value), "aabb")
+    test.assert_eq(list.len(pkcs12.certificates(pfx)), 0)
+    test.case("a key bag in the clear")
+    test.assert_eq(list.len(pkcs12.private_keys(pfx)), 1)
+    test.assert_eq_str(hex(pkcs12.private_keys(pfx)[0]), pkcs8_ec())
+    test.case("a safe-contents bag holds bags")
+    let holder = pkcs12.bags_of_kind(pfx, KIND_SAFE_CONTENTS)[0]
+    match pkcs12.bags_in(holder, "pw", 100)
+        Err(e)   => test.fail(e.message())
+        Ok(bags) =>
+            test.assert_eq(list.len(bags), 1)
+            test.assert_eq(bags[0].kind, KIND_KEY)
+    test.assert_eq_str(said(pkcs12.bags_in(pkcs12.bags_of_kind(pfx, KIND_KEY)[0], "pw", 100)), "cms: malformed structure: only a safe-contents bag holds bags")
+
+fn read_ok_bare(safes: Str) -> Pfx
+    match pkcs12.read(h(bare_pfx(safes)), "pw", 100000, false)
+        Ok(p)  => p
+        Err(e) =>
+            test.fail(e.message())
+            Pfx { version: 0, safes: [], mac_present: false, mac_hash: "", mac_iterations: 0 }
+
+@test
+fn test_pfx_refusals() [io]
+    test.assert_eq_str(read_bare(data_safe(bag(OID_KEY_BAG, pkcs8_ec(), ""))), "ok")
+    test.assert_eq_str(read_bare(data_safe(t(48, oidh(OID_KEY_BAG) + "0500"))), "cms: malformed structure: the bag value is under [0]")
+    test.assert_eq_str(read_bare(hex(must(cmsinfo.write(OID_SIGNED_DATA, h("3000"))))), "cms: content type 1.2.840.113549.1.7.2 where data or encrypted-data was expected")
+    test.assert_eq_str(said(pkcs12.read(h(pfx_with(2, "", "")), "pw", 100, false)), "cms: malformed structure: the PFX version is 2, only 3 is defined")
+    test.assert_eq_str(said(pkcs12.read(h(bare_pfx("")), "pw", 100, true)), "cms: no match: a MAC in the PFX")
+    test.assert_eq_str(said(pkcs12.read(h(bare_pfx("")), "pw", 100, false)), "ok")
+    test.assert_eq_str(said(pkcs12.read(h("0500"), "pw", 100, false)), "cms: malformed structure: the PFX is not the expected type")
+    test.case("the MAC's hash and iteration count")
+    for hash in [OID_SHA384, OID_SHA512, OID_SHA1, OID_SHA256]
+        test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", mac_data(hash, 2))), "pw", 100, true)), "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", mac_data("1.2.3", 2))), "pw", 100, true)), "cms: algorithm 1.2.3 is not implemented")
+    test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", mac_data(OID_SHA1, 0))), "pw", 100, true)), "cms: unusable key: the MAC iteration count is 0, the limit is 100")
+    test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", t(48, t(48, algh(OID_SHA1) + octh(zeros(20))) + octh(zeros(8))))), "pw", 100, true)),
+        "cms: the signature, digest or tag did not verify")
+    test.assert_eq_str(said(pkcs12.read(h(pfx_with(3, "", mac_data(OID_SHA1, 2))), bytes.to_str(h("ff")), 100, true)), "cms: malformed structure: the text is not well-formed UTF-8")

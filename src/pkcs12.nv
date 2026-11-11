@@ -215,6 +215,7 @@ fn hmac(hash: Str, key: Bytes, msg: Bytes) -> Result<Bytes, CmsError>
         "2.16.840.1.101.3.4.2.1" => Ok(hashing.hmac_sha256(key, msg, bytes.zeros(32)))
         "2.16.840.1.101.3.4.2.2" => Ok(hashing.hmac_sha384(key, msg, bytes.zeros(48)))
         "2.16.840.1.101.3.4.2.3" => Ok(hashing.hmac_sha512(key, msg, bytes.zeros(64)))
+        // cov: skip — `mac_of` derives the MAC key first, and `p12kdf.derive` refuses every hash this match does not name
         _                        => Err(CmsUnsupportedAlg(hash))
 
 // The MAC of the AuthenticatedSafe octets under the password.

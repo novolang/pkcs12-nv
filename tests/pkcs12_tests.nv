@@ -10,7 +10,8 @@
 //   openssl pkcs12 -export -legacy -inkey ec.key -in ec.pem -name "cms-nv test" \
 //     -passout pass:secret -out p12_rc2.p12
 //
-// and are checked in as hex.  The first is PBES2 with PBKDF2-HMAC-SHA-256
+// and are checked in as tests/p12_modern.p12, tests/p12_3des.p12 and
+// tests/p12_rc2.p12, and below as hex.  The first is PBES2 with PBKDF2-HMAC-SHA-256
 // and AES-256-CBC and a HMAC-SHA-256 MAC; the others are the legacy
 // TripleDES and RC2 schemes under a HMAC-SHA-1 MAC.  RFC 7292 prints no
 // example bytes, so the key derivation is checked against the vector of the
